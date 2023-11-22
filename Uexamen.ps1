@@ -1,4 +1,66 @@
 ##############################################################################
+#
+# VERSION 2.0
+# Nov. 2023
+#
+# Genera usuarios para examenes, oposiciones o cortesia
+#
+#############################################################################
+
+
+##############################################################################
+# FUNCION New-Passwd
+#
+#         Genera una password basada en sílabas más legible
+#
+# PARAMETROS:
+#               Longitud de las sílabas
+##############################################################################
+
+function New-Passwd($Length) 
+{
+
+    Begin {
+        #consonants except hard to speak ones
+        [Char[]]$lowercaseConsonants = "bcdfghjklmnprstv"
+        [Char[]]$uppercaseConsonants = "BCDFGHJKLMNPRSTV"
+        #vowels
+        [Char[]]$lowercaseVowels = "aeiou"
+        #both
+        $lowercaseConsantsVowels = $lowercaseConsonants+$lowercaseVowels
+        #numbers
+        [Char[]]$numbers = "23456789"
+        #special characters
+        [Char[]]$specialCharacters = '!$.+&?:_%>-*'
+
+        $countNum = 0
+    }
+    Process {
+            $script:Passwd = ''
+            #random location for special char between first syllable and length
+            $specialCharSpot = Get-Random -Minimum 1 -Maximum $Length
+            for ($i=0; $i -lt $Length; $i++) {
+                if ($i -eq $specialCharSpot) {
+                    #add a special char
+                    $script:Passwd += ($specialCharacters | Get-Random -Count 1)
+                }
+                #Start with uppercase
+                if ($i -eq 0) {
+                    $script:Passwd += ($uppercaseConsonants | Get-Random -Count 1)
+                } else {
+                    $script:Passwd += ($lowercaseConsonants | Get-Random -Count 1)
+                }
+                $script:Passwd += ($lowercaseVowels | Get-Random -Count 1)
+                $script:Passwd += ($lowercaseConsantsVowels | Get-Random -Count 1)
+            }
+            #add a number at the end
+            $randNumNum = Get-Random -Minimum 3 -Maximum 4
+            $script:Passwd += (($numbers | Get-Random -Count $randNumNum)-join '')
+            return $script:Passwd
+    }
+}
+
+##############################################################################
 # FUNCION generateRandomPassword
 #
 #         Eso
@@ -9,7 +71,9 @@
 
 function generateRandomPassword()
     {
-        $alphabet = 'abcdefghijklmnopqrstuvwxyz1234567890!$%&/()=,.-_:;+*'
+        $alphabet = 'abcdefghijkmnpqrstuvwxyz23456789!$%&/()=,.-_:;+*'
+        $numbers = '23456789'
+        $chars = '=,.-_*'
         $pass = [char[]]::new(10)
         $alphaLength = $alphabet.length - 1
         for ($i = 0; $i -lt 10; $i++) {
@@ -27,15 +91,21 @@ function generateRandomPassword()
 # PARAMETROS:
 #               fichero cue para deshacer
 ##############################################################################
-function doUndo($undoFile)
+function doUndo($undoFile,$HomeBase)
 {
     #Recupera la lista de usuarios del fichero
     $userList = Import-Csv $undoFile -Delimiter "-" -Header user,password
     foreach( $user in $userList.user )
     {
         $user = $user.Trim()
-        $homePath = "\\cifs\especiales$\EXAMEN\"+$user
-      
+        $homePath = $HomeBase + $user
+        
+        #Comprobamos que existe
+        if (-Not (Test-Path $homePath))
+        {
+            Write-Host "No existe el home de los usuarios en " + $HomeBase + " ¿Seguro que el tipo de cuenta está bien?" -ForegroundColor Red
+            Exit
+        }
         #Borramos el home
         Remove-Item -Recurse -Force $homePath
         #Borramos el usuario
@@ -69,9 +139,9 @@ function createUser($username,$password)
 #               username
 ##############################################################################
 
-function createHome($username)
+function createHome($username,$HomeBase)
 {
-    $homePath = "\\cifs\especiales$\EXAMEN\"+$username
+    $homePath = $HomeBase+$username
     $adUser = "UCO\"+$username
     New-Item -Path $homePath -ItemType Directory
     $acl = Get-Acl $homePath
@@ -87,7 +157,26 @@ Import-Module ActiveDirectory
 
 Set-Location (Split-Path $MyInvocation.MyCommand.Path)
 
-Write-Host "Desea deshacer una operación (sS)" -ForegroundColor Yellow -NoNewline 
+#Preguntamos por el tipo de cuenta a crear
+
+Write-Host "¿Que tipo de cuenta desea procesar? (E)xamen (O)posiciones (C)ortesia: " -ForegroundColor Yellow -NoNewline 
+$type = Read-Host
+switch -Wildcard ($type)
+{
+    "E" {$HomeBase = "\\cifs\EXAMENES$\"}
+    "C" {$HomeBase = "\\cifs\CORTESIA$\"}
+    "O" {$HomeBase = "\\cifs\OPOSICIONES$\"}
+    default
+    {
+        Write-Host "Error: Debe escoger entre E, O ó C" -ForegroundColor Red
+        Exit
+    }
+}
+
+$typeString = [regex]::Match($HomeBase, '\\\\.+\\(.+)\$').Groups[1].Value
+Write-Host "Trabajando con cuentas de $typeString" -ForegroundColor Green
+
+Write-Host "Desea deshacer una operación (sS) " -ForegroundColor Yellow -NoNewline 
 $undo = Read-Host 
 if($undo -like "S")
 {
@@ -102,11 +191,11 @@ if($undo -like "S")
         }
         if(Test-Path   $undoFile -PathType Leaf)
         {
-            Write-Host "Ha seleccionado $undoFile está seguro que quiere deshacer (sS)" -NoNewline -ForegroundColor Yellow
+            Write-Host "Ha seleccionado $undoFile está seguro que quiere deshacer (sS) " -NoNewline -ForegroundColor Yellow
             $sure = Read-Host 
             if($sure -like "S")
             {
-                doUndo $undoFile
+                doUndo $undoFile $HomeBase
                 exit
             }
         }
@@ -132,12 +221,12 @@ else
     for($i=$start;$i -lt $start+$amount;$i++)
     {
       $suffix = $i.ToString()
-      $password = generateRandomPassword
+      $password = New-Passwd(2)
       $username = $prefix + $suffix.PadLeft($padlength,"0")
       Write-Host  "Creando " $username "-" $password
      
       createUser $username $password
-      createHome $username
+      createHome $username $HomeBase
       #Grabamos en el fichero
       $username+" - "+$password | Add-Content $salFile
     }
